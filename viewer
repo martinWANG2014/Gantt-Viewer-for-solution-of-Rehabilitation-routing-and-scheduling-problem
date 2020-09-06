@@ -1,0 +1,471 @@
+# coding=utf-8
+# !/bin/python
+# author: Chenghao WANG
+# Contact: chenghao.wang@hds.utc.fr
+# institute: Heudiasyc, université de technologie de compiègne
+# 05/09/2020
+####################
+import Tkinter as tk
+import random
+import sys
+from tkinter import *
+from tkinter.filedialog import askopenfilename
+
+
+def color_list(my_patients):
+    color = {my_patients[i].index: "#" + ''.join([random.choice('3456789ABCDEF') for _ in range(6)])
+             for i in range(len(my_patients))}
+    return color
+
+
+class Treatment:
+    def __init__(self, index_therapist, index_patient, treatment_start, treatment_end, travel_from, travel_to,
+                 relax_time):
+        self.index_therapist = index_therapist
+        self.index_patient = index_patient
+        self.treatment_start = treatment_start
+        self.treatment_end = treatment_end
+        self.travel_from = travel_from
+        self.travel_to = travel_to
+        self.relax_time = relax_time
+
+
+class Therapist:
+    def __init__(self, index, start_time, end_time, my_treatments):
+        self.index = index
+        self.start_time = start_time
+        self.end_time = end_time
+        self.treatments = [item for item in my_treatments if item.index_therapist == self.index]
+        self.treatments.sort(key=lambda x: x.treatment_start)
+
+
+class Patient:
+    def __init__(self, index, start_time, end_time, my_treatments):
+        self.index = index
+        self.start_time = start_time
+        self.end_time = end_time
+        self.treatments = [item for item in my_treatments if item.index_patient == self.index]
+        self.treatments.sort(key=lambda x: x.treatment_start)
+
+
+class GanttRPSRP(tk.Frame):
+    def __init__(self, root, factor=0.4):
+        tk.Frame.__init__(self, root)
+
+        # the height for a rectangle.
+        self.rectangle_height = 5
+        self.factor = factor
+        # the slackness between two machine.
+        self.inter_machine = int(0.4 * self.rectangle_height)
+        self.delta_x = self.inter_machine
+        self.delta_m = 10
+        self.delta_y = self.rectangle_height
+        # width and height for main windows.
+        self.width_window = root.winfo_screenwidth()
+        self.height_window = root.winfo_screenheight()
+        self.canvas = tk.Canvas(self, width=self.width_window, height=self.height_window, background="white")
+        self.xsb = tk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        self.ysb = tk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.ysb.set, xscrollcommand=self.xsb.set)
+        self.canvas.config(scrollregion=self.canvas.bbox(ALL))
+
+        self.xsb.grid(row=1, column=0, sticky="ew")
+        self.ysb.grid(row=0, column=1, sticky="ns")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.app = Toplevel(self)
+        self.app.title("Scheduling of patients")
+        self.app.tk.call('wm', 'iconphoto', self.app._w, tk.PhotoImage(file='icon_pat.png'))
+        self.canvas_patient = tk.Canvas(self.app, width=self.width_window, height=self.height_window,
+                                        background="white")
+        self.xsb_patient = tk.Scrollbar(self.app, orient="horizontal", command=self.canvas_patient.xview)
+        self.ysb_patient = tk.Scrollbar(self.app, orient="vertical", command=self.canvas_patient.yview)
+        self.canvas_patient.configure(yscrollcommand=self.ysb_patient.set, xscrollcommand=self.xsb_patient.set)
+        self.canvas_patient.config(scrollregion=self.canvas_patient.bbox(ALL))
+
+        self.xsb_patient.grid(row=1, column=0, sticky="ew")
+        self.ysb_patient.grid(row=0, column=1, sticky="ns")
+        self.canvas_patient.grid(row=0, column=0, sticky="nsew")
+
+        self.app.grid_rowconfigure(0, weight=1)
+        self.app.grid_columnconfigure(0, weight=1)
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        # my patient lists.
+        self.my_patients = []
+        # my therapist lists.
+        self.my_therapists = []
+        # my_treatment_lists.
+        self.my_treatments = []
+        self.my_color = []
+        self.min_tau = 0
+        self.max_tau = 1440
+        self.min_a_i = 0
+        self.max_b_i = 1440
+        self.tipwindow = None
+        # self.tipwindow_patient = None
+        self.my_items = []
+
+        self.pack()
+        # Plot my scheduling figure.
+        self.filename = askopenfilename(filetypes=(("gantt files", "*.gantt"), ("all files", "*.*")))
+        if not self.filename:
+            root.destroy()
+        else:
+            self.read_from_file()
+
+            self.my_color = color_list(self.my_patients)
+            posy = self.inter_machine
+
+            for line in range(self.delta_m + self.delta_x + int((self.min_a_i - self.min_tau) * self.factor),
+                              self.delta_m + self.delta_x + int((self.max_b_i - self.min_tau) * self.factor),
+                              5):  # range(start, stop, step)
+                self.canvas.create_line([(line, posy + self.inter_machine), (
+                    line, posy + len(self.my_therapists) * (self.rectangle_height + self.inter_machine))],
+                                        dash=(3, 5), fill='black',
+                                        tags='grid_line_w')
+            # design for therapists.
+            for therapist in self.my_therapists:
+                posy += self.rectangle_height + self.inter_machine
+                self.canvas.create_line(
+                    self.delta_m + self.delta_x + (therapist.start_time - self.min_tau) * self.factor, posy,
+                    self.delta_m + self.delta_x + (therapist.end_time - self.min_tau) * self.factor, posy, width=3, tag=("ML" + str(therapist.index)))
+
+                self.canvas.create_text(self.delta_x, posy - self.rectangle_height / 2,
+                                        text='MT' + str(therapist.index), tag=("M" + str(therapist.index)))
+
+                for treatment in therapist.treatments:
+                    fred = self.canvas.create_rectangle(
+                        self.delta_m + self.delta_x + (treatment.treatment_start - self.min_tau) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m + self.delta_x + (treatment.treatment_end - self.min_tau) * self.factor,
+                        posy - 0.5,
+                        fill=self.my_color[treatment.index_patient], tag=(
+                            "T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                            "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                treatment.travel_to), "TM", str(treatment.treatment_start)))
+                    self.canvas.tag_bind(fred, "<Any-Enter>", self.mouseEnter)
+                    self.canvas.tag_bind(fred, "<Any-Leave>", self.mouseLeave)
+                    self.canvas.tag_bind(fred, "<Button-3>", self.rightClick)
+                    self.canvas.tag_bind(fred, "<Button-1>", self.leftClick)
+                    self.my_items.append(fred)
+                    fred = self.canvas.create_rectangle(
+                        self.delta_m + self.delta_x + (
+                                    treatment.treatment_start - self.min_tau - treatment.travel_from) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m + self.delta_x + (treatment.treatment_start - self.min_tau) * self.factor,
+                        posy - 0.5, fill=self.my_color[treatment.index_patient], state="hidden", stipple='question',
+                        tag=("T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                             "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                 treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                 treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                 treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                 treatment.travel_to), "HI"))
+                    self.canvas.tag_bind(fred, "<Any-Enter>", self.mouseEnter)
+                    self.canvas.tag_bind(fred, "<Any-Leave>", self.mouseLeave)
+                    self.canvas.tag_bind(fred, "<Button-3>", self.rightClick)
+                    self.canvas.tag_bind(fred, "<Button-1>", self.leftClick)
+                    self.my_items.append(fred)
+                    fred = self.canvas.create_rectangle(
+                        self.delta_m + self.delta_x + (treatment.treatment_end - self.min_tau) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m + self.delta_x + (
+                                    treatment.treatment_end + treatment.relax_time - self.min_tau) * self.factor,
+                        posy - 0.5, fill=self.my_color[treatment.index_patient],
+                        state="hidden", stipple='info', tag=(
+                            "T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                            "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                treatment.travel_to), "HI"))
+                    self.canvas.tag_bind(fred, "<Any-Enter>", self.mouseEnter)
+                    self.canvas.tag_bind(fred, "<Any-Leave>", self.mouseLeave)
+                    self.canvas.tag_bind(fred, "<Button-3>", self.rightClick)
+                    self.canvas.tag_bind(fred, "<Button-1>", self.leftClick)
+                    self.my_items.append(fred)
+                    fred = self.canvas.create_rectangle(
+                        self.delta_m + self.delta_x + (
+                                    treatment.treatment_end + treatment.relax_time - self.min_tau) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m + self.delta_x + (
+                                    treatment.treatment_end + treatment.relax_time + treatment.travel_to - self.min_tau) * self.factor,
+                        posy - 0.5, fill=self.my_color[treatment.index_patient], state="hidden", stipple='gray50',
+                        tag=("T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                             "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                 treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                 treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                 treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                 treatment.travel_to), "HI"))
+                    self.canvas.tag_bind(fred, "<Any-Enter>", self.mouseEnter)
+                    self.canvas.tag_bind(fred, "<Any-Leave>", self.mouseLeave)
+                    self.canvas.tag_bind(fred, "<Button-3>", self.rightClick)
+                    self.canvas.tag_bind(fred, "<Button-1>", self.leftClick)
+                    self.my_items.append(fred)
+
+            posy += self.inter_machine * 2
+            # design for patient
+            for patient in self.my_patients:
+                posy += self.rectangle_height + self.inter_machine
+                self.canvas_patient.create_line(
+                    self.delta_m * 2 + self.delta_x + (patient.start_time - self.min_tau) * self.factor, posy,
+                    self.delta_m * 2 + self.delta_x + (patient.end_time - self.min_tau) * self.factor, posy, width=3)
+
+                self.canvas_patient.create_text(self.delta_x, posy - self.rectangle_height / 2,
+                                                text='P' + str(patient.index))
+
+                for treatment in patient.treatments:
+                    fred = self.canvas_patient.create_rectangle(
+                        self.delta_m * 2 + self.delta_x + (treatment.treatment_start - self.min_tau) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m * 2 + self.delta_x + (treatment.treatment_end - self.min_tau) * self.factor,
+                        posy - 0.5,
+                        fill=self.my_color[treatment.index_patient], tag=(
+                            "T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                            "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                treatment.travel_to), "TM"))
+                    self.canvas_patient.tag_bind(fred, "<Any-Enter>", self.mouseEnterPatient)
+                    self.canvas_patient.tag_bind(fred, "<Any-Leave>", self.mouseLeavePatient)
+                    # self.my_items.append(fred)
+                    fred = self.canvas_patient.create_rectangle(
+                        self.delta_m * 2 + self.delta_x + (
+                                    treatment.treatment_start - self.min_tau - treatment.travel_from) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m * 2 + self.delta_x + (treatment.treatment_start - self.min_tau) * self.factor,
+                        posy - 0.5, fill=self.my_color[treatment.index_patient], stipple='question',
+                        tag=("T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                             "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                 treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                 treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                 treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                 treatment.travel_to)))
+                    self.canvas_patient.tag_bind(fred, "<Any-Enter>", self.mouseEnterPatient)
+                    self.canvas_patient.tag_bind(fred, "<Any-Leave>", self.mouseLeavePatient)
+                    # self.my_items.append(fred)
+                    fred = self.canvas_patient.create_rectangle(
+                        self.delta_m * 2 + self.delta_x + (treatment.treatment_end - self.min_tau) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m * 2 + self.delta_x + (
+                                    treatment.treatment_end + treatment.relax_time - self.min_tau) * self.factor,
+                        posy - 0.5, fill=self.my_color[treatment.index_patient],
+                        stipple='info', tag=(
+                            "T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                            "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                treatment.travel_to)))
+                    self.canvas_patient.tag_bind(fred, "<Any-Enter>", self.mouseEnterPatient)
+                    self.canvas_patient.tag_bind(fred, "<Any-Leave>", self.mouseLeavePatient)
+                    # self.my_items.append(fred)
+                    fred = self.canvas_patient.create_rectangle(
+                        self.delta_m * 2 + self.delta_x + (
+                                    treatment.treatment_end + treatment.relax_time - self.min_tau) * self.factor,
+                        posy - 0.5 - self.rectangle_height,
+                        self.delta_m * 2 + self.delta_x + (
+                                    treatment.treatment_end + treatment.relax_time + treatment.travel_to - self.min_tau) * self.factor,
+                        posy - 0.5, fill=self.my_color[treatment.index_patient], stipple='gray50',
+                        tag=("T" + str(treatment.index_therapist), "P" + str(treatment.index_patient),
+                             "\ntreatment starts at:"+str(treatment.treatment_start)+"\ntreatment terminates at:"+str(treatment.treatment_end)+"\ntreatment duration:" + str(
+                                 treatment.treatment_end - treatment.treatment_start) + "\nrelax time:" + str(
+                                 treatment.relax_time) + "\ntravelling time from previous treatment:" + str(
+                                 treatment.travel_from) + "\ntravelling time to next treatment:" + str(
+                                 treatment.travel_to)))
+                    self.canvas_patient.tag_bind(fred, "<Any-Enter>", self.mouseEnterPatient)
+                    self.canvas_patient.tag_bind(fred, "<Any-Leave>", self.mouseLeavePatient)
+                    # self.my_items.append(fred)
+
+        # This is what enables using the mouse:
+        self.canvas.bind("<ButtonPress-1>", self.move_start)
+        self.canvas.bind("<B1-Motion>", self.move_move)
+        # linux scroll
+        self.canvas.bind("<Button-4>", self.zoomerP)
+        self.canvas.bind("<Button-5>", self.zoomerM)
+        # windows scroll
+        self.canvas.bind("<MouseWheel>", self.zoomer)
+
+        self.canvas_patient.bind("<ButtonPress-1>", self.move_start_patient)
+        self.canvas_patient.bind("<B1-Motion>", self.move_move_patient)
+        # linux scroll
+        self.canvas_patient.bind("<Button-4>", self.zoomerP_patient)
+        self.canvas_patient.bind("<Button-5>", self.zoomerM_patient)
+        # windows scroll
+        self.canvas_patient.bind("<MouseWheel>", self.zoomer_patient)
+
+    def mouseEnter(self, event):
+        # the CURRENT tag is applied to the object the cursor is over.
+        # this happens automatically.
+        my_tag = self.canvas.gettags(CURRENT)
+
+        self.tipwindow = tw = Toplevel(self.canvas)
+        tw.wm_overrideredirect(1)
+        tw.wm_geometry("+%d+%d" % (event.x + self.canvas.winfo_rootx(), event.y + self.canvas.winfo_rooty() + 20))
+        label = Label(tw, text="treatment of patient " + my_tag[1] + " at therapist " + my_tag[0] + my_tag[2],
+                      justify=LEFT,
+                      background="#ffffe0", relief=SOLID, borderwidth=1,
+                      font=("tahoma", "12", "normal"))
+        label.pack(ipadx=1)
+
+    def leftClick(self, event):
+        # the CURRENT tag is applied to the object the cursor is over.
+        # this happens automatically.
+        my_tag = self.canvas.gettags(CURRENT)
+
+        related_items = self.canvas.find_withtag(my_tag[1])
+        for i in related_items:
+            self.canvas.itemconfig(i, state="normal")
+
+        rest_items = list(set(self.my_items) - set(related_items))
+        for i in rest_items:
+            self.canvas.itemconfig(i, state="hidden")
+
+    def mouseEnterPatient(self, event):
+        # the CURRENT tag is applied to the object the cursor is over.
+        # this happens automatically.
+        my_tag = self.canvas_patient.gettags(CURRENT)
+        self.tipwindow = tw = Toplevel(self.canvas_patient)
+        tw.wm_overrideredirect(1)
+        tw.wm_geometry(
+            "+%d+%d" % (event.x + self.canvas_patient.winfo_rootx(), event.y + self.canvas_patient.winfo_rooty() + 20))
+        label = Label(tw, text="treatment of patient " + my_tag[1] + " at therapist " + my_tag[0] + my_tag[2],
+                      justify=LEFT,
+                      background="#ffffe0", relief=SOLID, borderwidth=1,
+                      font=("tahoma", "12", "normal"))
+        label.pack(ipadx=1)
+
+    def mouseLeavePatient(self, event):
+        # the CURRENT tag is applied to the object the cursor is over.
+        # this happens automatically.
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+    def mouseLeave(self, event):
+
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+    def rightClick(self, event):
+        # the CURRENT tag is applied to the object the cursor is over.
+        # this happens automatically.
+        my_tag = self.canvas.gettags(CURRENT)
+
+        related_items = self.canvas.find_withtag(my_tag[1])
+        rest_items = list(set(self.my_items) - set(related_items))
+        for i in rest_items:
+            if "HI" not in self.canvas.gettags(i):
+                self.canvas.itemconfig(i, state="normal")
+        for i in related_items:
+            if "HI" in self.canvas.gettags(i):
+                self.canvas.itemconfig(i, state="hidden")
+
+    # read from file
+    def read_from_file(self):
+        with open(self.filename, "r") as fic:
+            while True:
+                lines = fic.readline()
+                if lines.startswith("Gantt"):
+                    break
+            # print "find Gantt ... okay"
+            fic.readline()
+            fic.readline()
+
+            my_thr = fic.readline().split()
+            my_pat = fic.readline().split()
+
+            a_i = [int(x) for x in fic.readline().split()]
+            b_i = [int(x) for x in fic.readline().split()]
+            self.min_a_i = min(a_i)
+            self.max_b_i = max(b_i)
+            tau_minus = [int(x) for x in fic.readline().split()]
+            tau_plus = [int(x) for x in fic.readline().split()]
+            self.min_tau = min(tau_minus)
+            self.max_tau = max(tau_plus)
+
+            for _ in range(len(my_thr)):
+                my_nb_patients_per_therapist = int(fic.readline().split()[1])
+                for _ in range(my_nb_patients_per_therapist):
+                    fic.readline().split()
+
+            for _ in range(len(my_pat)):
+                tmp_i = fic.readline().split()
+                id_patient = tmp_i[0]
+                my_nb_therapists_per_patient = int(tmp_i[1])
+                for _ in range(my_nb_therapists_per_patient):
+                    vn_i = fic.readline().split()
+                    self.my_treatments.append(
+                        Treatment(vn_i[0], id_patient, int(vn_i[1]), int(vn_i[2]), int(vn_i[3]), int(vn_i[4]),
+                                  int(vn_i[5])))
+
+            for i in range(len(my_pat)):
+                self.my_patients.append(Patient(my_pat[i], tau_minus[i], tau_plus[i], self.my_treatments))
+
+            for i in range(len(my_thr)):
+                self.my_therapists.append(Therapist(my_thr[i], a_i[i], b_i[i], self.my_treatments))
+
+    # move
+    def move_start(self, event):
+        self.canvas.scan_mark(event.x, event.y)
+
+    def move_move(self, event):
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    # windows zoom
+    def zoomer(self, event):
+        if (event.delta > 0):
+            self.canvas.scale("all", event.x, event.y, 1.1, 1.1)
+        elif (event.delta < 0):
+            self.canvas.scale("all", event.x, event.y, 0.9, 0.9)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    # linux zoom
+    def zoomerP(self, event):
+        self.canvas.scale("all", event.x, event.y, 1.1, 1.1)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def zoomerM(self, event):
+        self.canvas.scale("all", event.x, event.y, 0.9, 0.9)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def move_start_patient(self, event):
+        self.canvas_patient.scan_mark(event.x, event.y)
+
+    def move_move_patient(self, event):
+        self.canvas_patient.scan_dragto(event.x, event.y, gain=1)
+
+    # windows zoom
+    def zoomer_patient(self, event):
+        if (event.delta > 0):
+            self.canvas_patient.scale("all", event.x, event.y, 1.1, 1.1)
+        elif (event.delta < 0):
+            self.canvas_patient.scale("all", event.x, event.y, 0.9, 0.9)
+        self.canvas_patient.configure(scrollregion=self.canvas_patient.bbox("all"))
+
+    # linux zoom
+    def zoomerP_patient(self, event):
+        self.canvas_patient.scale("all", event.x, event.y, 1.1, 1.1)
+        self.canvas_patient.configure(scrollregion=self.canvas_patient.bbox("all"))
+
+    def zoomerM_patient(self, event):
+        self.canvas_patient.scale("all", event.x, event.y, 0.9, 0.9)
+        self.canvas_patient.configure(scrollregion=self.canvas_patient.bbox("all"))
+
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    root.title("Scheduling of therapists")
+    root.tk.call('wm', 'iconphoto', root._w, tk.PhotoImage(file='icon_thp.png'))
+    if len(sys.argv) < 2:
+        GanttRPSRP(root).pack(fill="both", expand=50)
+    else:
+        GanttRPSRP(root, float(sys.argv[1])).pack(fill="both", expand=50)
+    root.mainloop()
